@@ -5,10 +5,12 @@ namespace ArchitectGenerator.Core;
 public class SolutionScaffolder
 {
 	private readonly CommandRunner _runner;
+	private readonly BaseStructureWriter _baseStructureWriter;
 
-	public SolutionScaffolder(CommandRunner runner)
+	public SolutionScaffolder(CommandRunner runner, BaseStructureWriter baseStructureWriter)
 	{
 		_runner = runner;
+		_baseStructureWriter = baseStructureWriter;
 	}
 
 	public async Task CreateAsync(string solutionName, string basePath)
@@ -37,9 +39,13 @@ public class SolutionScaffolder
 		await CreateWebApi(solutionPath, presentationPath, $"{solutionName}.WebApi");
 
 		await AddReferences(solutionPath, solutionName);
+		await AddPackages(solutionPath, solutionName);
+		await AddFrameworkReferences(solutionPath);
 
-		await _runner.RunAsync("dotnet", "build", solutionPath);
+		await _baseStructureWriter.WriteAsync(solutionPath, solutionName);
 
+	//	await _runner.RunAsync("dotnet", "build", solutionPath);
+		await _runner.RunAsync("dotnet", "build -v minimal", solutionPath);
 		Console.ForegroundColor = ConsoleColor.Green;
 		Console.WriteLine("🎉 PROJE OLUŞTURULDU!");
 		Console.ResetColor();
@@ -51,7 +57,7 @@ public class SolutionScaffolder
 
 		await _runner.RunAsync(
 			"dotnet",
-			$"new classlib -n {projectName} -o \"{projectPath}\"",
+			$"new classlib -n {projectName} -o \"{projectPath}\" --framework net10.0",
 			solutionPath);
 
 		var csprojPath = Path.Combine(projectPath, $"{projectName}.csproj");
@@ -68,7 +74,7 @@ public class SolutionScaffolder
 
 		await _runner.RunAsync(
 			"dotnet",
-			$"new webapi -n {projectName} -o \"{projectPath}\"",
+			$"new webapi -n {projectName} -o \"{projectPath}\" --framework net10.0",
 			solutionPath);
 
 		var csprojPath = Path.Combine(projectPath, $"{projectName}.csproj");
@@ -87,7 +93,6 @@ public class SolutionScaffolder
 		string baseApp = Path.Combine(src, "Base", "Base.Application", "Base.Application.csproj");
 		string baseInfra = Path.Combine(src, "Base", "Base.Infrastructure", "Base.Infrastructure.csproj");
 		string basePersistence = Path.Combine(src, "Base", "Base.Persistence", "Base.Persistence.csproj");
-
 		string webApi = Path.Combine(src, "Presentation", $"{solutionName}.WebApi", $"{solutionName}.WebApi.csproj");
 
 		await _runner.RunAsync("dotnet", $"add \"{baseApp}\" reference \"{baseDomain}\"", solutionPath);
@@ -95,5 +100,65 @@ public class SolutionScaffolder
 		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" reference \"{baseApp}\"", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{webApi}\" reference \"{baseInfra}\"", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{webApi}\" reference \"{basePersistence}\"", solutionPath);
+	}
+
+	private async Task AddPackages(string solutionPath, string solutionName)
+	{
+		string src = Path.Combine(solutionPath, "src");
+
+		string baseApp = Path.Combine(src, "Base", "Base.Application", "Base.Application.csproj");
+		string baseInfra = Path.Combine(src, "Base", "Base.Infrastructure", "Base.Infrastructure.csproj");
+		string basePersistence = Path.Combine(src, "Base", "Base.Persistence", "Base.Persistence.csproj");
+		string webApi = Path.Combine(src, "Presentation", $"{solutionName}.WebApi", $"{solutionName}.WebApi.csproj");
+
+		// Base.Application
+		await _runner.RunAsync("dotnet", $"add \"{baseApp}\" package MediatR", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseApp}\" package FluentValidation.DependencyInjectionExtensions", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseApp}\" package Microsoft.Extensions.DependencyInjection.Abstractions", solutionPath);
+
+		// Base.Infrastructure
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package BCrypt.Net-Next", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package BCrypt.Net-Next", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package StackExchange.Redis", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.AspNetCore.Authentication.JwtBearer", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.IdentityModel.Tokens", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package System.IdentityModel.Tokens.Jwt", solutionPath);
+		
+		// Base.Persistence
+		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.EntityFrameworkCore.SqlServer", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.EntityFrameworkCore.Relational", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.Extensions.DependencyInjection.Abstractions", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.Extensions.Configuration.Abstractions", solutionPath);
+
+		// WebApi
+		await _runner.RunAsync("dotnet", $"add \"{webApi}\" package Swashbuckle.AspNetCore", solutionPath);
+	}
+
+	private async Task AddFrameworkReferences(string solutionPath)
+	{
+		string src = Path.Combine(solutionPath, "src");
+		string infraCsproj = Path.Combine(src, "Base", "Base.Infrastructure", "Base.Infrastructure.csproj");
+
+		var content = await File.ReadAllTextAsync(infraCsproj);
+
+		// Varsa Http paket referansını temizle
+		content = content.Replace(
+			"<PackageReference Include=\"Microsoft.AspNetCore.Http\" />", "");
+		content = content.Replace(
+			"<PackageReference Include=\"Microsoft.AspNetCore.Http.Abstractions\" />", "");
+
+		// FrameworkReference ekle
+		content = content.Replace(
+			"</Project>",
+			"""
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
+""");
+
+		await File.WriteAllTextAsync(infraCsproj, content);
+		Console.WriteLine("✅ FrameworkReference eklendi: Base.Infrastructure");
 	}
 }

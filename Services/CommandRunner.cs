@@ -32,12 +32,14 @@ public class CommandRunner
 
 		if (!string.IsNullOrWhiteSpace(output))
 		{
+			Console.WriteLine("----- STDOUT -----");
 			Console.WriteLine(output);
 		}
 
 		if (!string.IsNullOrWhiteSpace(error))
 		{
 			Console.ForegroundColor = ConsoleColor.Red;
+			Console.WriteLine("----- STDERR -----");
 			Console.WriteLine(error);
 			Console.ResetColor();
 		}
@@ -45,7 +47,13 @@ public class CommandRunner
 		if (process.ExitCode != 0)
 		{
 			throw new Exception(
-				$"Komut başarısız oldu.\nFileName: {fileName}\nArguments: {arguments}\nExitCode: {process.ExitCode}\nError: {error}");
+				$"Komut başarısız oldu.\n" +
+				$"FileName: {fileName}\n" +
+				$"Arguments: {arguments}\n" +
+				$"WorkingDirectory: {workingDirectory}\n" +
+				$"ExitCode: {process.ExitCode}\n" +
+				$"STDOUT:\n{output}\n" +
+				$"STDERR:\n{error}");
 		}
 	}
 }

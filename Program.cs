@@ -1,6 +1,6 @@
 ﻿using ArchitectGenerator.Core;
 using ArchitectGenerator.Services;
-
+//program.cs
 try
 {
 	Console.WriteLine("🏗️ Architect Generator");
@@ -11,7 +11,6 @@ try
 	if (string.IsNullOrWhiteSpace(solutionName))
 	{
 		Console.WriteLine("❌ Geçersiz isim");
-		Console.WriteLine("Çıkmak için bir tuşa bas...");
 		Console.ReadKey();
 		return;
 	}
@@ -24,20 +23,20 @@ try
 		path = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
 	}
 
-	var scaffolder = new SolutionScaffolder(new CommandRunner());
+	var runner = new CommandRunner();
+	var fileWriter = new FileWriter();
+	var baseStructureWriter = new BaseStructureWriter(fileWriter);
+	var scaffolder = new SolutionScaffolder(runner, baseStructureWriter);
 
 	await scaffolder.CreateAsync(solutionName, path);
 
-	Console.WriteLine("İşlem tamamlandı. Çıkmak için bir tuşa bas...");
+	Console.WriteLine("Tamamlandı. Çıkmak için bir tuşa bas...");
 	Console.ReadKey();
 }
 catch (Exception ex)
 {
 	Console.ForegroundColor = ConsoleColor.Red;
-	Console.WriteLine("HATA:");
 	Console.WriteLine(ex.ToString());
 	Console.ResetColor();
-
-	Console.WriteLine("Çıkmak için bir tuşa bas...");
 	Console.ReadKey();
 }
