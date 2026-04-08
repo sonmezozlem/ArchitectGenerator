@@ -118,7 +118,6 @@ public class SolutionScaffolder
 
 		// Base.Infrastructure
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package BCrypt.Net-Next", solutionPath);
-		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package BCrypt.Net-Next", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package StackExchange.Redis", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.AspNetCore.Authentication.JwtBearer", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.IdentityModel.Tokens", solutionPath);
