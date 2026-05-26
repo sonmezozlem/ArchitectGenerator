@@ -12,7 +12,7 @@ public class BaseStructureWriter
 		_fileWriter = fileWriter;
 	}
 
-	public async Task WriteAsync(string solutionPath, string solutionName)
+	public async Task WriteAsync(string solutionPath, string solutionName, DatabaseProvider provider)
 	{
 		var srcPath = Path.Combine(solutionPath, "src");
 		var baseRoot = Path.Combine(srcPath, "Base");
@@ -21,8 +21,8 @@ public class BaseStructureWriter
 		await WriteBaseDomain(baseRoot);
 		await WriteBaseApplication(baseRoot);
 		await WriteBaseInfrastructure(baseRoot);
-		await WriteBasePersistence(baseRoot);
-		await WriteWebApi(webApiRoot, solutionName);
+		await WriteBasePersistence(baseRoot, provider);
+		await WriteWebApi(webApiRoot, solutionName, provider);
 	}
 
 	private async Task WriteBaseDomain(string baseRoot)
@@ -144,7 +144,7 @@ public class BaseStructureWriter
 			BaseTemplates.JwtBlacklistMiddleware());
 	}
 
-	private async Task WriteBasePersistence(string baseRoot)
+	private async Task WriteBasePersistence(string baseRoot, DatabaseProvider provider)
 	{
 		var persistenceRoot = Path.Combine(baseRoot, "Base.Persistence");
 
@@ -182,10 +182,10 @@ public class BaseStructureWriter
 
 		await _fileWriter.WriteAsync(
 			Path.Combine(persistenceRoot, "ConfigureServices.cs"),
-			BaseTemplates.BasePersistenceConfigureServices());
+			BaseTemplates.BasePersistenceConfigureServices(provider));
 	}
 
-	private async Task WriteWebApi(string webApiRoot, string solutionName)
+	private async Task WriteWebApi(string webApiRoot, string solutionName, DatabaseProvider provider)
 	{
 		await _fileWriter.WriteAsync(
 			Path.Combine(webApiRoot, "Program.cs"),
@@ -193,7 +193,7 @@ public class BaseStructureWriter
 
 		await _fileWriter.WriteAsync(
 			Path.Combine(webApiRoot, "appsettings.json"),
-			BaseTemplates.AppSettings(solutionName));
+			BaseTemplates.AppSettings(solutionName, provider));
 
 		await _fileWriter.WriteAsync(
 	Path.Combine(webApiRoot, "Controllers", "Base", "ApiControllerBase.cs"),

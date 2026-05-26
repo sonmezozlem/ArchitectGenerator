@@ -1,4 +1,6 @@
-﻿namespace ArchitectGenerator.Templates;
+﻿using ArchitectGenerator.Core;
+
+namespace ArchitectGenerator.Templates;
 
 public static class BaseTemplates
 {
@@ -786,8 +788,8 @@ public class UnitOfWork : IUnitOfWork
 }
 """;
 
-	public static string BasePersistenceConfigureServices() =>
-	"""
+	public static string BasePersistenceConfigureServices(DatabaseProvider provider) =>
+$$"""
 using Base.Application.Interfaces;
 using Base.Domain.Interfaces;
 using Base.Persistence.DbContext;
@@ -805,7 +807,7 @@ public static class ConfigureServices
         var connectionString = configuration.GetConnectionString("DefaultConnection");
 
         services.AddDbContext<AppDbContext>(options =>
-            options.UseSqlServer(connectionString));
+            {{DatabaseProviderInfo.UseDbCall(provider)}});
 
         services.AddScoped(typeof(IRepository<>), typeof(GenericRepository<>));
         services.AddScoped<IUnitOfWork>(sp =>
@@ -825,6 +827,8 @@ using Base.Infrastructure;
 using Base.Infrastructure.Middlewares;
 using Base.Persistence;
 using Microsoft.AspNetCore.RateLimiting;
+// <ARCHITECT_GEN_MODULES_USING_START>
+// <ARCHITECT_GEN_MODULES_USING_END>
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -849,6 +853,8 @@ builder.Services.AddCors(options =>
 builder.Services.AddBaseInfrastructure(builder.Configuration);
 builder.Services.AddBaseApplication();
 builder.Services.AddBasePersistence(builder.Configuration);
+// <ARCHITECT_GEN_MODULES_DI_START>
+// <ARCHITECT_GEN_MODULES_DI_END>
 
 var app = builder.Build();
 
@@ -874,11 +880,11 @@ app.MapControllers();
 app.Run();
 """;
 
-	public static string AppSettings(string solutionName) =>
+	public static string AppSettings(string solutionName, DatabaseProvider provider) =>
     $$"""
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Server=.;Database={{solutionName}}Db;Trusted_Connection=True;TrustServerCertificate=True"
+    "DefaultConnection": "{{DatabaseProviderInfo.ConnectionString(provider, solutionName)}}"
   },
   "JwtSettings": {
     "SecretKey": "YOUR_SUPER_SECRET_KEY_HERE",

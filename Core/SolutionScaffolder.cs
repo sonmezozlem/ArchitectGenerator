@@ -6,19 +6,22 @@ public class SolutionScaffolder
 {
 	private readonly CommandRunner _runner;
 	private readonly BaseStructureWriter _baseStructureWriter;
+	private readonly TestScaffolder? _testScaffolder;
 
-	public SolutionScaffolder(CommandRunner runner, BaseStructureWriter baseStructureWriter)
+	public SolutionScaffolder(CommandRunner runner, BaseStructureWriter baseStructureWriter, TestScaffolder? testScaffolder = null)
 	{
 		_runner = runner;
 		_baseStructureWriter = baseStructureWriter;
+		_testScaffolder = testScaffolder;
 	}
 
-	public async Task CreateAsync(string solutionName, string basePath)
+	public async Task CreateAsync(string solutionName, string basePath, DatabaseProvider provider)
 	{
 		var solutionPath = Path.Combine(basePath, solutionName);
 		Directory.CreateDirectory(solutionPath);
 
 		Console.WriteLine($"📁 Solution path: {solutionPath}");
+		Console.WriteLine($"🗄️ Veritabanı: {DatabaseProviderInfo.DisplayName(provider)}");
 
 		await _runner.RunAsync("dotnet", $"new sln -n {solutionName}", solutionPath);
 
@@ -39,15 +42,18 @@ public class SolutionScaffolder
 		await CreateWebApi(solutionPath, presentationPath, $"{solutionName}.WebApi");
 
 		await AddReferences(solutionPath, solutionName);
-		await AddPackages(solutionPath, solutionName);
+		await AddPackages(solutionPath, solutionName, provider);
 		await AddFrameworkReferences(solutionPath);
 
-		await _baseStructureWriter.WriteAsync(solutionPath, solutionName);
+		await _baseStructureWriter.WriteAsync(solutionPath, solutionName, provider);
 
-	//	await _runner.RunAsync("dotnet", "build", solutionPath);
-		await _runner.RunAsync("dotnet", "build -v minimal", solutionPath);
+		if (_testScaffolder is not null)
+		{
+			await _testScaffolder.CreateBaseTestsAsync(solutionPath);
+		}
+
 		Console.ForegroundColor = ConsoleColor.Green;
-		Console.WriteLine("🎉 PROJE OLUŞTURULDU!");
+		Console.WriteLine("🎉 BASE KATMAN OLUŞTURULDU!");
 		Console.ResetColor();
 	}
 
@@ -102,7 +108,7 @@ public class SolutionScaffolder
 		await _runner.RunAsync("dotnet", $"add \"{webApi}\" reference \"{basePersistence}\"", solutionPath);
 	}
 
-	private async Task AddPackages(string solutionPath, string solutionName)
+	private async Task AddPackages(string solutionPath, string solutionName, DatabaseProvider provider)
 	{
 		string src = Path.Combine(solutionPath, "src");
 
@@ -122,9 +128,9 @@ public class SolutionScaffolder
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.AspNetCore.Authentication.JwtBearer", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package Microsoft.IdentityModel.Tokens", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{baseInfra}\" package System.IdentityModel.Tokens.Jwt", solutionPath);
-		
+
 		// Base.Persistence
-		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.EntityFrameworkCore.SqlServer", solutionPath);
+		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package {DatabaseProviderInfo.PackageName(provider)}", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.EntityFrameworkCore.Relational", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.Extensions.DependencyInjection.Abstractions", solutionPath);
 		await _runner.RunAsync("dotnet", $"add \"{basePersistence}\" package Microsoft.Extensions.Configuration.Abstractions", solutionPath);
