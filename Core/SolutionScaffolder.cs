@@ -15,7 +15,7 @@ public class SolutionScaffolder
 		_testScaffolder = testScaffolder;
 	}
 
-	public async Task CreateAsync(string solutionName, string basePath, DatabaseProvider provider)
+	public async Task CreateAsync(string solutionName, string basePath, DatabaseProvider provider, BaseOptions options)
 	{
 		var solutionPath = Path.Combine(basePath, solutionName);
 		Directory.CreateDirectory(solutionPath);
@@ -45,7 +45,7 @@ public class SolutionScaffolder
 		await AddPackages(solutionPath, solutionName, provider);
 		await AddFrameworkReferences(solutionPath);
 
-		await _baseStructureWriter.WriteAsync(solutionPath, solutionName, provider);
+		await _baseStructureWriter.WriteAsync(solutionPath, solutionName, provider, options);
 
 		if (_testScaffolder is not null)
 		{

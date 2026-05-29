@@ -2,7 +2,7 @@
 
 namespace ArchitectGenerator.Templates;
 
-public static class BaseTemplates
+public static partial class BaseTemplates
 {
     public static string BaseEntity() =>
 """
@@ -21,16 +21,21 @@ public abstract class BaseEntity
 }
 """;
 
-    public static string UserRole() =>
-"""
-namespace Base.Domain.Enums;
-
-public enum UserRole : byte
-{
-    Admin = 1,
-    Employee = 2
-}
-""";
+    public static string UserRole(IReadOnlyList<string> roles)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("namespace Base.Domain.Enums;");
+        sb.AppendLine();
+        sb.AppendLine("public enum UserRole : byte");
+        sb.AppendLine("{");
+        for (int i = 0; i < roles.Count; i++)
+        {
+            var comma = i < roles.Count - 1 ? "," : "";
+            sb.AppendLine($"    {roles[i]} = {i + 1}{comma}");
+        }
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
 
     public static string User() =>
 """
@@ -56,8 +61,13 @@ public class RefreshToken : BaseEntity
 {
     public long UserId { get; set; }
     public User User { get; set; } = null!;
-    public string TokenHash { get; set; } = null!;
-    public string TokenSalt { get; set; } = null!;
+
+    // Token client'a "selector.verifier" formatında verilir.
+    // Selector: DB'de indexli, hızlı arama için (gizli değil).
+    // VerifierHash: verifier'ın hash'i; gizli kısım yalnızca hash olarak saklanır.
+    public string Selector { get; set; } = null!;
+    public string VerifierHash { get; set; } = null!;
+
     public DateTimeOffset Expiration { get; set; }
 }
 """;
@@ -80,6 +90,11 @@ public interface IRepository<T> where T : BaseEntity
     Task<List<T>> GetAllAsync(Expression<Func<T, bool>>? filter = null, params Expression<Func<T, object>>[] includes);
     Task<List<T>> Where(Expression<Func<T, bool>> predicate, params string[] includes);
     Task<bool> AnyAsync(Expression<Func<T, bool>> predicate);
+    Task<(List<T> Items, int TotalCount)> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<T, bool>>? filter = null,
+        params Expression<Func<T, object>>[] includes);
 }
 """;
 
@@ -162,6 +177,8 @@ public interface IUserContextService
     long? GetCurrentUserId();
     string? GetCurrentUserRole();
     long? GetCurrentEmployeeId();
+    string? GetCurrentJti();
+    DateTimeOffset? GetCurrentTokenExpiration();
 }
 """;
 
@@ -173,7 +190,7 @@ namespace Base.Application.Interfaces;
 
 public interface IJwtService
 {
-    Task<string> GenerateToken(User user);
+    Task<(string Token, DateTime ExpiresAtUtc)> GenerateToken(User user);
 }
 """;
 
@@ -194,8 +211,14 @@ namespace Base.Application.Interfaces;
 
 public interface IRefreshTokenGenerator
 {
-    string GenerateToken();
-    (string Hash, string Salt) HashToken(string token);
+    // Yeni refresh token üretir. Token client'a verilir; Selector + VerifierHash DB'ye yazılır.
+    (string Token, string Selector, string VerifierHash) Generate();
+
+    // "selector.verifier" formatındaki token'ı parçalarına ayırır.
+    bool TryParse(string token, out string selector, out string verifier);
+
+    // Verifier, saklanan hash ile eşleşiyor mu (sabit zamanlı karşılaştırma).
+    bool Verify(string verifier, string verifierHash);
 }
 """;
 
@@ -305,6 +328,19 @@ public class UserContextService : IUserContextService
         var value = _httpContextAccessor.HttpContext?.User?.FindFirstValue("EmployeeId");
         return long.TryParse(value, out var id) ? id : null;
     }
+
+    public string? GetCurrentJti()
+    {
+        return _httpContextAccessor.HttpContext?.User?.FindFirstValue("jti");
+    }
+
+    public DateTimeOffset? GetCurrentTokenExpiration()
+    {
+        var value = _httpContextAccessor.HttpContext?.User?.FindFirstValue("exp");
+        return long.TryParse(value, out var unix)
+            ? DateTimeOffset.FromUnixTimeSeconds(unix)
+            : null;
+    }
 }
 """;
 
@@ -312,6 +348,7 @@ public class UserContextService : IUserContextService
 """
 using System.Net;
 using System.Text.Json;
+using Base.Application.Common.Exceptions;
 using FluentValidation;
 using Microsoft.AspNetCore.Http;
 
@@ -338,8 +375,11 @@ public class GlobalExceptionMiddleware
             context.Response.StatusCode = ex switch
             {
                 ValidationException => (int)HttpStatusCode.BadRequest,
-                KeyNotFoundException => (int)HttpStatusCode.NotFound,
+                InvalidCredentialsException => (int)HttpStatusCode.Unauthorized,
                 UnauthorizedAccessException => (int)HttpStatusCode.Unauthorized,
+                ForbiddenException => (int)HttpStatusCode.Forbidden,
+                ConflictException => (int)HttpStatusCode.Conflict,
+                KeyNotFoundException => (int)HttpStatusCode.NotFound,
                 _ => (int)HttpStatusCode.InternalServerError
             };
 
@@ -377,12 +417,16 @@ using Base.Application.Settings;
 using Base.Infrastructure.Services;
 using Base.Infrastructure.Services.Auth;
 using Base.Infrastructure.Services.Redis;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
+using System.Security.Claims;
+using System.Text;
 
 namespace Base.Infrastructure;
 
@@ -399,6 +443,33 @@ public static class ConfigureServices
         services.AddScoped<IRefreshTokenGenerator, RefreshTokenGenerator>();
 
         services.Configure<JwtSettings>(configuration.GetSection("JwtSettings"));
+
+        // JWT Bearer kimlik doğrulama
+        var jwtSettings = configuration.GetSection("JwtSettings").Get<JwtSettings>()
+            ?? throw new InvalidOperationException("JwtSettings yapılandırması bulunamadı.");
+
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                // Token içindeki kısa isimler (jti, exp, sub...) olduğu gibi kalsın
+                options.MapInboundClaims = false;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwtSettings.Issuer,
+                    ValidAudience = jwtSettings.Audience,
+                    IssuerSigningKey = new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(jwtSettings.SecretKey)),
+                    ClockSkew = TimeSpan.Zero,
+                    NameClaimType = ClaimTypes.Name,
+                    RoleClaimType = ClaimTypes.Role
+                };
+            });
+
+        services.AddAuthorization();
 
         // Redis
         services.AddSingleton<IConnectionMultiplexer>(_ =>
@@ -553,13 +624,16 @@ public class RefreshTokenConfiguration : BaseEntityConfiguration<RefreshToken>
         builder.ToTable("RefreshTokens", "Base");
         base.Configure(builder);
 
-        builder.Property(x => x.TokenHash)
+        builder.Property(x => x.Selector)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(128);
 
-        builder.Property(x => x.TokenSalt)
+        builder.HasIndex(x => x.Selector)
+            .IsUnique();
+
+        builder.Property(x => x.VerifierHash)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(256);
 
         builder.Property(x => x.Expiration)
             .IsRequired();
@@ -699,6 +773,34 @@ public class GenericRepository<T> : IRepository<T> where T : BaseEntity
     {
         return await DbSet.AnyAsync(predicate);
     }
+
+    public async Task<(List<T> Items, int TotalCount)> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        System.Linq.Expressions.Expression<Func<T, bool>>? filter = null,
+        params System.Linq.Expressions.Expression<Func<T, object>>[] includes)
+    {
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 20;
+
+        IQueryable<T> query = DbSet;
+
+        if (filter != null)
+            query = query.Where(filter);
+
+        foreach (var include in includes)
+            query = query.Include(include);
+
+        var total = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(x => x.Id)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return (items, total);
+    }
 }
 """;
 
@@ -826,6 +928,7 @@ using Base.Application;
 using Base.Infrastructure;
 using Base.Infrastructure.Middlewares;
 using Base.Persistence;
+using Base.Persistence.Seeding;
 using Microsoft.AspNetCore.RateLimiting;
 // <ARCHITECT_GEN_MODULES_USING_START>
 // <ARCHITECT_GEN_MODULES_USING_END>
@@ -877,6 +980,10 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
+// İlk admin: appsettings > SeedAdmin > Enabled=true ise ve hiç admin yoksa oluşturulur.
+// (Önce migration uygulayın: dotnet ef database update)
+await app.Services.SeedAdminAsync();
+
 app.Run();
 """;
 
@@ -887,10 +994,15 @@ app.Run();
     "DefaultConnection": "{{DatabaseProviderInfo.ConnectionString(provider, solutionName)}}"
   },
   "JwtSettings": {
-    "SecretKey": "YOUR_SUPER_SECRET_KEY_HERE",
+    "SecretKey": "CHANGE_THIS_DEV_ONLY_SECRET_KEY_AT_LEAST_32_CHARS_1234567890",
     "Issuer": "{{solutionName}}",
     "Audience": "{{solutionName}}Users",
     "ExpirationInMinutes": 60
+  },
+  "SeedAdmin": {
+    "Enabled": false,
+    "UserName": "",
+    "Password": ""
   },
   "RedisConnection": "localhost:6379",
   "Logging": {
@@ -925,7 +1037,7 @@ public class JwtService : IJwtService
         _jwtSettings = jwtSettings.Value;
     }
 
-    public Task<string> GenerateToken(User user)
+    public Task<(string Token, DateTime ExpiresAtUtc)> GenerateToken(User user)
     {
         var jti = Guid.NewGuid().ToString();
         var expiration = DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationInMinutes);
@@ -949,7 +1061,8 @@ public class JwtService : IJwtService
             expires: expiration,
             signingCredentials: creds);
 
-        return Task.FromResult(new JwtSecurityTokenHandler().WriteToken(token));
+        var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+        return Task.FromResult((tokenString, expiration));
     }
 }
 """;
@@ -958,36 +1071,55 @@ public class JwtService : IJwtService
 	"""
 using Base.Application.Interfaces;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Base.Infrastructure.Services.Auth;
 
 public class RefreshTokenGenerator : IRefreshTokenGenerator
 {
-    public string GenerateToken()
+    public (string Token, string Selector, string VerifierHash) Generate()
     {
-        var bytes = new byte[64];
-        using var rng = RandomNumberGenerator.Create();
-        rng.GetBytes(bytes);
+        var selector = ToUrlSafe(RandomNumberGenerator.GetBytes(16));
+        var verifier = ToUrlSafe(RandomNumberGenerator.GetBytes(32));
+        var token = $"{selector}.{verifier}";
+        return (token, selector, Hash(verifier));
+    }
+
+    public bool TryParse(string token, out string selector, out string verifier)
+    {
+        selector = string.Empty;
+        verifier = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        var parts = token.Split('.');
+        if (parts.Length != 2)
+            return false;
+
+        selector = parts[0];
+        verifier = parts[1];
+        return selector.Length > 0 && verifier.Length > 0;
+    }
+
+    public bool Verify(string verifier, string verifierHash)
+    {
+        var computed = Hash(verifier);
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(computed),
+            Encoding.UTF8.GetBytes(verifierHash));
+    }
+
+    // Verifier yüksek entropili rastgele bir değer olduğundan SHA-256 yeterli ve doğrudur
+    // (PBKDF2 gibi yavaş KDF'ler düşük entropili PAROLALAR için gereklidir).
+    private static string Hash(string verifier)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(verifier));
         return Convert.ToBase64String(bytes);
     }
 
-    public (string Hash, string Salt) HashToken(string token)
-    {
-        var salt = new byte[16];
-        using var rng = RandomNumberGenerator.Create();
-        rng.GetBytes(salt);
-
-        using var pbkdf2 = new Rfc2898DeriveBytes(
-            token,
-            salt,
-            100_000,
-            HashAlgorithmName.SHA256);
-
-        var hash = Convert.ToBase64String(pbkdf2.GetBytes(32));
-        var saltStr = Convert.ToBase64String(salt);
-
-        return (hash, saltStr);
-    }
+    private static string ToUrlSafe(byte[] bytes) =>
+        Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
 }
 """;
 
@@ -1181,4 +1313,5 @@ public abstract class ApiControllerBase : ControllerBase
         _mediator ??= HttpContext.RequestServices.GetRequiredService<ISender>();
 }
 """;
+
 }

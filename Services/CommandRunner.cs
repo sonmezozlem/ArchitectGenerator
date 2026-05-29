@@ -25,10 +25,14 @@ public class CommandRunner
 
 		process.Start();
 
-		string output = await process.StandardOutput.ReadToEndAsync();
-		string error = await process.StandardError.ReadToEndAsync();
+		// stdout/stderr eşzamanlı okunur; aksi halde bir akışın buffer'ı dolunca deadlock olabilir.
+		var outputTask = process.StandardOutput.ReadToEndAsync();
+		var errorTask = process.StandardError.ReadToEndAsync();
 
-		await process.WaitForExitAsync();
+		await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync());
+
+		string output = await outputTask;
+		string error = await errorTask;
 
 		if (!string.IsNullOrWhiteSpace(output))
 		{
