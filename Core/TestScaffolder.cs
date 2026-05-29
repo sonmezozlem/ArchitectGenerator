@@ -14,7 +14,7 @@ public class TestScaffolder
 		_fileWriter = fileWriter;
 	}
 
-	public async Task CreateBaseTestsAsync(string solutionPath)
+	public async Task CreateBaseTestsAsync(string solutionPath, string adminRole)
 	{
 		Console.WriteLine("🧪 Base test projeleri oluşturuluyor...");
 		var testsBaseDir = Path.Combine(solutionPath, "tests", "Base");
@@ -38,7 +38,7 @@ public class TestScaffolder
 		await AddPackage(solutionPath, testsBaseDir, "Base.Persistence.Tests", "Microsoft.EntityFrameworkCore.InMemory");
 		await _fileWriter.WriteAsync(
 			Path.Combine(testsBaseDir, "Base.Persistence.Tests", "GenericRepositoryTests.cs"),
-			TestTemplates.BasePersistenceTests());
+			TestTemplates.BasePersistenceTests(adminRole));
 	}
 
 	public async Task CreateModuleTestsAsync(string solutionPath, string moduleName)

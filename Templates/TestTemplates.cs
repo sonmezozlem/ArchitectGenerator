@@ -136,8 +136,8 @@ public class PasswordHasherTests
 }
 """;
 
-	public static string BasePersistenceTests() =>
-"""
+	public static string BasePersistenceTests(string adminRole) =>
+$$"""
 using Base.Application.Interfaces;
 using Base.Domain.Enums;
 using Base.Domain.Identity;
@@ -170,7 +170,7 @@ public class GenericRepositoryTests
     {
         UserName = "test-user",
         PasswordHash = "hash",
-        Role = UserRole.Employee
+        Role = UserRole.{{adminRole}}
     };
 
     [Fact]

@@ -49,7 +49,7 @@ public class SolutionScaffolder
 
 		if (_testScaffolder is not null)
 		{
-			await _testScaffolder.CreateBaseTestsAsync(solutionPath);
+			await _testScaffolder.CreateBaseTestsAsync(solutionPath, options.AdminRole);
 		}
 
 		Console.ForegroundColor = ConsoleColor.Green;
